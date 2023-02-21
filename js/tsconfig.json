@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "es2019",
+    "module": "commonjs",
+    "strictPropertyInitialization": false,
+    "rootDir": "src",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "outDir": "build",
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true
+  }
+}
