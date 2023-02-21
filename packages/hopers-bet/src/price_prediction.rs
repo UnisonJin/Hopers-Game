@@ -141,7 +141,7 @@ pub mod msg {
         },
         MyGameList {
             player: Addr,
-            start_after: Option<u128>,
+            start_after: Option<Uint128>,
             limit: Option<u32>,
         },
         MyPendingReward {

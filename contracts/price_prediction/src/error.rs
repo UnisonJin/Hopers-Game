@@ -10,6 +10,6 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
-    #[error("The sum of wallet ration is not equal to 1")]
+    #[error("The sum of wallet ratio is not equal to 1")]
     WrongRatio {},
 }

@@ -114,10 +114,6 @@ fn execute_distribute_fund(
     }
 
     for dev_wallet in dev_wallet_list {
-        total_ratio = total_ratio + dev_wallet.ratio;
-        if total_ratio != Decimal::one() {
-            return Err(ContractError::WrongRatio {});
-        }
         let token_transfer_msg = get_cw20_transfer_msg(
             &config.token_addr,
             &dev_wallet.address,
@@ -178,7 +174,7 @@ fn execute_collect_winnings(
                         Direction::Bear => {
                             let won_shares = game.amount;
                             pool_shares
-                                .multiply_ratio(won_shares, round.bull_amount)
+                                .multiply_ratio(won_shares, round.bear_amount)
                         }
                     }
                 }
@@ -204,7 +200,10 @@ fn execute_collect_winnings(
     msg_send_winnings =
         get_cw20_transfer_msg(&config.token_addr, &info.sender, winnings)?;
 
-    Ok(resp.add_message(msg_send_winnings))
+    Ok(resp
+        .add_message(msg_send_winnings)
+        .add_attribute("action", "collect-winnings")
+        .add_attribute("amount", winnings))
 }
 
 fn execute_bet(
@@ -277,8 +276,10 @@ fn execute_bet(
             NEXT_ROUND.save(deps.storage, &bet_round)?;
             resp =
                 resp.add_event(Event::new("hopers_bet").add_attributes(vec![
+                    ("action", "hopers-bet".to_string()),
                     ("round", round_id.to_string()),
-                    ("bet_bull", bet_amt.to_string()),
+                    ("direction", "bull".to_string()),
+                    ("amount", bet_amt.to_string()),
                     ("round_bull_total", bet_round.bull_amount.to_string()),
                     ("account", info.sender.to_string()),
                 ]));
@@ -298,8 +299,10 @@ fn execute_bet(
             NEXT_ROUND.save(deps.storage, &bet_round)?;
             resp =
                 resp.add_event(Event::new("hopers_bet").add_attributes(vec![
+                    ("action", "hopers-bet".to_string()),
                     ("round", round_id.to_string()),
-                    ("bet_bear", bet_amt.to_string()),
+                    ("direction", "bear".to_string()),
+                    ("amount", bet_amt.to_string()),
                     ("round_bear_total", bet_round.bear_amount.to_string()),
                     ("account", info.sender.to_string()),
                 ]));
@@ -343,6 +346,7 @@ fn execute_close_round(
                     live_round.id.u128(),
                     &finished_round,
                 )?;
+
                 resp = resp.add_event(Event::new("hopers_bet").add_attributes(
                     vec![
                         ("round_dead", live_round.id.to_string()),
@@ -425,7 +429,7 @@ fn execute_close_round(
         }
     }
 
-    Ok(resp)
+    Ok(resp.add_attribute("action", "close-round"))
 }
 
 fn execute_update_config(
@@ -562,7 +566,7 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
 pub fn query_my_games(
     deps: Deps,
     player: Addr,
-    start_after: Option<u128>,
+    start_after: Option<Uint128>,
     limit: Option<u32>,
 ) -> StdResult<MyGameResponse> {
     let limit =
@@ -570,7 +574,7 @@ pub fn query_my_games(
 
     let start = if let Some(start) = start_after {
         let round_id = start;
-        Some(Bound::exclusive(bet_info_key(round_id, &player)))
+        Some(Bound::exclusive(bet_info_key(round_id.u128(), &player)))
     } else {
         None
     };
@@ -595,7 +599,12 @@ pub fn query_my_pending_reward(
 
     for game in my_game_list.my_game_list {
         let round_id = game.round_id;
-        let round = ROUNDS.load(deps.storage, round_id.u128())?;
+        let round = ROUNDS.may_load(deps.storage, round_id.u128())?;
+
+        if round.is_none() {
+            continue;
+        }
+        let round = round.unwrap();
 
         let pool_shares = round.bear_amount + round.bull_amount;
 
@@ -623,7 +632,7 @@ pub fn query_my_pending_reward(
                         Direction::Bear => {
                             let won_shares = game.amount;
                             pool_shares
-                                .multiply_ratio(won_shares, round.bull_amount)
+                                .multiply_ratio(won_shares, round.bear_amount)
                         }
                     }
                 }
