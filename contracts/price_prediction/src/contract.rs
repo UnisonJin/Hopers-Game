@@ -2,8 +2,9 @@ use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::response::ConfigResponse;
 use crate::state::{
-    bet_info_key, bet_info_storage, BetInfo, MyGameResponse, ACCUMULATED_FEE,
-    CONFIG, IS_HAULTED, LIVE_ROUND, NEXT_ROUND, NEXT_ROUND_ID, ROUNDS,
+    bet_info_key, bet_info_storage, BetInfo, MyGameResponse,
+    PendingRewardResponse, ACCUMULATED_FEE, CONFIG, IS_HAULTED, LIVE_ROUND,
+    NEXT_ROUND, NEXT_ROUND_ID, ROUNDS,
 };
 use crate::{Config, Direction, PartialConfig};
 #[cfg(not(feature = "library"))]
@@ -478,6 +479,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             start_after,
             limit,
         } => to_binary(&query_my_games(deps, player, start_after, limit)?),
+        QueryMsg::MyPendingReward { player } => {
+            to_binary(&query_my_pending_reward(deps, player)?)
+        }
     }
 }
 
@@ -580,6 +584,63 @@ pub fn query_my_games(
         .map(|res| res.map(|item| item.1))
         .collect::<StdResult<Vec<_>>>()?;
     Ok(MyGameResponse { my_game_list })
+}
+
+pub fn query_my_pending_reward(
+    deps: Deps,
+    player: Addr,
+) -> StdResult<PendingRewardResponse> {
+    let my_game_list = query_my_games_without_limit(deps, player.clone())?;
+    let mut winnings = Uint128::zero();
+
+    for game in my_game_list.my_game_list {
+        let round_id = game.round_id;
+        let round = ROUNDS.load(deps.storage, round_id.u128())?;
+
+        let pool_shares = round.bear_amount + round.bull_amount;
+
+        if round.bear_amount == Uint128::zero()
+            || round.bull_amount == Uint128::zero()
+        {
+            winnings += game.amount;
+        } else {
+            let round_winnings = match round.winner {
+                Some(Direction::Bull) => {
+                    /* Only claimable once */
+                    match game.direction {
+                        Direction::Bull => {
+                            let won_shares = game.amount;
+                            pool_shares
+                                .multiply_ratio(won_shares, round.bull_amount)
+                        }
+                        Direction::Bear => Uint128::zero(),
+                    }
+                }
+                Some(Direction::Bear) => {
+                    /* Only claimable once */
+                    match game.direction {
+                        Direction::Bull => Uint128::zero(),
+                        Direction::Bear => {
+                            let won_shares = game.amount;
+                            pool_shares
+                                .multiply_ratio(won_shares, round.bull_amount)
+                        }
+                    }
+                }
+                None => {
+                    /* Only claimable once */
+                    game.amount
+                }
+            };
+
+            /* Count it up */
+            winnings += round_winnings;
+        }
+    }
+
+    Ok(PendingRewardResponse {
+        pending_reward: winnings,
+    })
 }
 
 pub fn query_my_games_without_limit(
