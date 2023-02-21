@@ -144,6 +144,9 @@ pub mod msg {
             start_after: Option<u128>,
             limit: Option<u32>,
         },
+        MyPendingReward {
+            player: Addr,
+        },
     }
 }
 

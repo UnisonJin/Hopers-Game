@@ -63,3 +63,9 @@ pub fn bet_info_storage<'a>(
 pub struct MyGameResponse {
     pub my_game_list: Vec<BetInfo>,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct PendingRewardResponse {
+    pub pending_reward: Uint128,
+}
