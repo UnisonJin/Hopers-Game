@@ -1,5 +1,5 @@
 use crate::{Config, FinishedRound, LiveRound, NextRound};
-use cosmwasm_std::Addr;
+use cosmwasm_std::{Addr, Uint128};
 use cw_storage_plus::{Index, IndexList, IndexedMap, Item, Map, MultiIndex};
 use hopers_bet::price_prediction::Direction;
 use schemars::JsonSchema;
@@ -12,10 +12,10 @@ pub const NEXT_ROUND_ID: Item<u128> = Item::new("next_round_id");
 pub const NEXT_ROUND: Item<NextRound> = Item::new("next_round");
 /* The live round; not accepting bets */
 pub const LIVE_ROUND: Item<LiveRound> = Item::new("live_round");
-/* Bears in a given round */
-pub const BEAR_BETS: Map<(u128, Addr), u128> = Map::new("bear_bets");
-/* Bulls in a given round */
-pub const BULL_BETS: Map<(u128, Addr), u128> = Map::new("bull_bets");
+// /* Bears in a given round */
+// pub const BEAR_BETS: Map<(u128, Addr), u128> = Map::new("bear_bets");
+// /* Bulls in a given round */
+// pub const BULL_BETS: Map<(u128, Addr), u128> = Map::new("bull_bets");
 /* Bulls in a given round */
 pub const ACCUMULATED_FEE: Item<u128> = Item::new("accumulated_fee");
 
@@ -27,8 +27,8 @@ pub const ROUNDS: Map<u128, FinishedRound> = Map::new("rounds");
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct BetInfo {
     pub player: Addr,
-    pub round_id: u128,
-    pub amount: u128,
+    pub round_id: Uint128,
+    pub amount: Uint128,
     pub direction: Direction,
 }
 
