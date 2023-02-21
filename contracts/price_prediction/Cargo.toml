@@ -23,6 +23,7 @@ thiserror = { version = "1.0.31" }
 hopers-bet = { path = "../../packages/hopers-bet" }
 cw2 = "0.14.0"
 cw20 = { version = "0.10.0" }
+cw20-base = { version = "0.10.0", features = ["library"] }
 
 [dev-dependencies]
 cosmwasm-schema = "1.0.0"
