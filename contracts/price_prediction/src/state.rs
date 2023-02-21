@@ -12,15 +12,8 @@ pub const NEXT_ROUND_ID: Item<u128> = Item::new("next_round_id");
 pub const NEXT_ROUND: Item<NextRound> = Item::new("next_round");
 /* The live round; not accepting bets */
 pub const LIVE_ROUND: Item<LiveRound> = Item::new("live_round");
-// /* Bears in a given round */
-// pub const BEAR_BETS: Map<(u128, Addr), u128> = Map::new("bear_bets");
-// /* Bulls in a given round */
-// pub const BULL_BETS: Map<(u128, Addr), u128> = Map::new("bull_bets");
-/* Bulls in a given round */
-pub const ACCUMULATED_FEE: Item<u128> = Item::new("accumulated_fee");
 
-pub const MY_CLAIMED_ROUNDS: Map<(Addr, u128), bool> =
-    Map::new("my_claimed_rounds");
+pub const ACCUMULATED_FEE: Item<u128> = Item::new("accumulated_fee");
 
 pub const ROUNDS: Map<u128, FinishedRound> = Map::new("rounds");
 
@@ -63,4 +56,10 @@ pub fn bet_info_storage<'a>(
         ),
     };
     IndexedMap::new("bet_info", indexes)
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct MyGameResponse {
+    pub my_game_list: Vec<BetInfo>,
 }

@@ -120,9 +120,7 @@ pub mod msg {
         /**
          * Settle winnings for an account
          */
-        CollectWinnings {
-            rounds: Vec<Uint128>,
-        },
+        CollectWinnings {},
         DistributeFund {
             dev_wallet_list: Vec<WalletInfo>,
         },
@@ -135,8 +133,17 @@ pub mod msg {
     pub enum QueryMsg {
         Config {},
         Status {},
-        MyCurrentPosition { address: String },
-        FinishedRound { round_id: Uint128 },
+        MyCurrentPosition {
+            address: String,
+        },
+        FinishedRound {
+            round_id: Uint128,
+        },
+        MyGameList {
+            player: Addr,
+            start_after: Option<u128>,
+            limit: Option<u32>,
+        },
     }
 }
 

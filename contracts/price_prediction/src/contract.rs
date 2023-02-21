@@ -2,19 +2,19 @@ use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::response::ConfigResponse;
 use crate::state::{
-    bet_info_key, bet_info_storage, BetInfo, ACCUMULATED_FEE, CONFIG,
-    IS_HAULTED, LIVE_ROUND, MY_CLAIMED_ROUNDS, NEXT_ROUND, NEXT_ROUND_ID,
-    ROUNDS,
+    bet_info_key, bet_info_storage, BetInfo, MyGameResponse, ACCUMULATED_FEE,
+    CONFIG, IS_HAULTED, LIVE_ROUND, NEXT_ROUND, NEXT_ROUND_ID, ROUNDS,
 };
 use crate::{Config, Direction, PartialConfig};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, wasm_execute, Addr, BankMsg, Binary, Coin, CosmosMsg, Decimal,
-    Deps, DepsMut, Env, Event, MessageInfo, QueryRequest, Response, StdError,
-    StdResult, Uint128, WasmMsg, WasmQuery,
+    to_binary, Addr, Binary, Coin, CosmosMsg, Decimal, Deps, DepsMut, Env,
+    Event, MessageInfo, Order, QueryRequest, Response, StdError, StdResult,
+    Uint128, WasmMsg, WasmQuery,
 };
 use cw20::Cw20ExecuteMsg;
+use cw_storage_plus::Bound;
 use hopers_bet::fast_oracle::msg::QueryMsg as FastOracleQueryMsg;
 use hopers_bet::price_prediction::response::{
     MyCurrentPositionResponse, StatusResponse,
@@ -22,8 +22,10 @@ use hopers_bet::price_prediction::response::{
 use hopers_bet::price_prediction::{
     FinishedRound, LiveRound, MigrateMsg, NextRound, WalletInfo, FEE_PRECISION,
 };
-use std::collections::HashSet;
-use std::iter::FromIterator;
+
+// Query limits
+const DEFAULT_QUERY_LIMIT: u32 = 10;
+const MAX_QUERY_LIMIT: u32 = 30;
 
 const CONTRACT_NAME: &str = "deliverdao:price_prediction";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -80,11 +82,7 @@ pub fn execute(
             execute_bet(deps, info, env, round_id, Direction::Bull, amount)
         }
         ExecuteMsg::CloseRound {} => execute_close_round(deps, env),
-        ExecuteMsg::CollectWinnings { rounds } => execute_collect_winnings(
-            deps,
-            info,
-            rounds.iter().map(|r| r.u128()).collect(),
-        ),
+        ExecuteMsg::CollectWinnings {} => execute_collect_winnings(deps, info),
         ExecuteMsg::Hault {} => execute_update_hault(deps, info, env, true),
         ExecuteMsg::Resume {} => execute_update_hault(deps, info, env, false),
         ExecuteMsg::DistributeFund { dev_wallet_list } => {
@@ -135,88 +133,60 @@ fn execute_distribute_fund(
 fn execute_collect_winnings(
     deps: DepsMut,
     info: MessageInfo,
-    rounds: Vec<u128>,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     let mut winnings = Uint128::zero();
-    let mut resp = Response::new();
+    let resp = Response::new();
 
-    let no_duplicate_rounds: HashSet<u128> =
-        HashSet::from_iter(rounds.iter().cloned());
+    // let no_duplicate_rounds: HashSet<u128> =
+    //     HashSet::from_iter(rounds.iter().cloned());
 
-    for round_id in no_duplicate_rounds {
-        let round = ROUNDS.load(deps.storage, round_id)?;
-        let bet_info_key = bet_info_key(round_id, &info.sender.clone());
+    let my_game_list =
+        query_my_games_without_limit(deps.as_ref(), info.sender.clone())?;
 
-        // let maybe_bull = BULL_BETS.may_load(deps.storage, bet_key.clone())?;
-        // let maybe_bear = BEAR_BETS.may_load(deps.storage, bet_key.clone())?;
-        let user_bet_info_round =
-            bet_info_storage().may_load(deps.storage, bet_info_key)?;
-        let user_bet_amount_round: Uint128;
-
-        match user_bet_info_round {
-            Some(bet_info) => {
-                user_bet_amount_round = bet_info.amount;
-            }
-            None => user_bet_amount_round = Uint128::zero(),
-        }
+    for game in my_game_list.my_game_list {
+        let round_id = game.round_id;
+        let round = ROUNDS.load(deps.storage, round_id.u128())?;
 
         let pool_shares = round.bear_amount + round.bull_amount;
+        let bet_info_key = bet_info_key(round_id.u128(), &info.sender);
+
+        bet_info_storage().remove(deps.storage, bet_info_key.clone())?;
 
         if round.bear_amount == Uint128::zero()
             || round.bull_amount == Uint128::zero()
         {
-            // If no both sides are not taken, return funds, only claimable once
-            // BULL_BETS.remove(deps.storage, bet_key.clone());
-            // BEAR_BETS.remove(deps.storage, bet_key.clone());
-
-            // let bull_shares_no_counter_party =
-            //     Uint128::from(maybe_bull.unwrap_or(0u128));
-            // let bear_shares_no_counter_party =
-            //     Uint128::from(maybe_bear.unwrap_or(0u128));
-
-            bet_info_storage().remove(deps.storage, bet_info_key.clone())?;
-
-            winnings += user_bet_amount_round;
+            winnings += game.amount;
         } else {
             let round_winnings = match round.winner {
                 Some(Direction::Bull) => {
                     /* Only claimable once */
-                    BULL_BETS.remove(deps.storage, bet_key);
-                    let won_shares = Uint128::from(maybe_bull.unwrap_or(0u128));
-                    pool_shares.multiply_ratio(won_shares, round.bull_amount)
+                    match game.direction {
+                        Direction::Bull => {
+                            let won_shares = game.amount;
+                            pool_shares
+                                .multiply_ratio(won_shares, round.bull_amount)
+                        }
+                        Direction::Bear => Uint128::zero(),
+                    }
                 }
                 Some(Direction::Bear) => {
                     /* Only claimable once */
-                    BEAR_BETS.remove(deps.storage, bet_key);
-                    let won_shares = Uint128::from(maybe_bear.unwrap_or(0u128));
-                    pool_shares.multiply_ratio(won_shares, round.bear_amount)
+                    match game.direction {
+                        Direction::Bull => Uint128::zero(),
+                        Direction::Bear => {
+                            let won_shares = game.amount;
+                            pool_shares
+                                .multiply_ratio(won_shares, round.bull_amount)
+                        }
+                    }
                 }
                 None => {
                     /* Only claimable once */
-                    BEAR_BETS.remove(deps.storage, bet_key.clone());
-                    BULL_BETS.remove(deps.storage, bet_key);
-
-                    /* Give back what the wallet bet in case of tie */
-                    (maybe_bear.unwrap_or(0u128) + maybe_bull.unwrap_or(0u128))
-                        .into()
+                    game.amount
                 }
             };
 
-            if round_winnings > Uint128::zero() {
-                MY_CLAIMED_ROUNDS.save(
-                    deps.storage,
-                    (info.sender.clone(), round_id),
-                    &true,
-                )?;
-                resp = resp.add_event(Event::new("hopers_bet").add_attributes(
-                    vec![
-                        ("round", round_id.to_string()),
-                        ("collected_winnings", round_winnings.to_string()),
-                        ("account", info.sender.to_string()),
-                    ],
-                ));
-            }
             /* Count it up */
             winnings += round_winnings;
         }
@@ -278,12 +248,13 @@ fn execute_bet(
 
     let bet_info_key = bet_info_key(round_id.u128(), &info.sender.clone());
 
-    let bet_info = bet_info_storage().may_load(deps.storage, bet_info_key)?;
+    let bet_info =
+        bet_info_storage().may_load(deps.storage, bet_info_key.clone())?;
 
     if !bet_info.is_none() {
         return Err(ContractError::Std(StdError::generic_err(format!(
             "You are already bet for this game for {}, with amount: {}",
-            bet_info.unwrap().direction.to_string(),
+            bet_info.clone().unwrap().direction.to_string(),
             bet_info.unwrap().amount
         ))));
     }
@@ -295,7 +266,7 @@ fn execute_bet(
                 deps.storage,
                 bet_info_key.clone(),
                 &BetInfo {
-                    player: info.sender,
+                    player: info.sender.clone(),
                     round_id,
                     amount: bet_amt,
                     direction: Direction::Bull,
@@ -316,7 +287,7 @@ fn execute_bet(
                 deps.storage,
                 bet_info_key.clone(),
                 &BetInfo {
-                    player: info.sender,
+                    player: info.sender.clone(),
                     round_id,
                     amount: bet_amt,
                     direction: Direction::Bear,
@@ -502,6 +473,11 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::FinishedRound { round_id } => {
             to_binary(&query_finished_round(deps, round_id)?)
         }
+        QueryMsg::MyGameList {
+            player,
+            start_after,
+            limit,
+        } => to_binary(&query_my_games(deps, player, start_after, limit)?),
     }
 }
 
@@ -523,8 +499,8 @@ fn query_my_current_position(
     let next_bet_info =
         bet_info_storage().may_load(deps.storage, next_bet_key)?;
 
-    let next_bull_amount = Uint128::zero();
-    let next_bear_amount = Uint128::zero();
+    let mut next_bull_amount = Uint128::zero();
+    let mut next_bear_amount = Uint128::zero();
 
     match next_bet_info {
         Some(bet_info) => match bet_info.direction {
@@ -543,7 +519,7 @@ fn query_my_current_position(
     if round_id > 1 {
         let live_bet_key = (round_id - 2, deps.api.addr_validate(&address)?);
         let live_bet_info =
-            bet_info_storage().may_load(deps.storage, next_bet_key)?;
+            bet_info_storage().may_load(deps.storage, live_bet_key)?;
         match live_bet_info {
             Some(bet_info) => match bet_info.direction {
                 Direction::Bull => {
@@ -577,6 +553,47 @@ fn query_status(deps: Deps) -> StdResult<StatusResponse> {
 
 fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     CONFIG.load(deps.storage)
+}
+
+pub fn query_my_games(
+    deps: Deps,
+    player: Addr,
+    start_after: Option<u128>,
+    limit: Option<u32>,
+) -> StdResult<MyGameResponse> {
+    let limit =
+        limit.unwrap_or(DEFAULT_QUERY_LIMIT).min(MAX_QUERY_LIMIT) as usize;
+
+    let start = if let Some(start) = start_after {
+        let round_id = start;
+        Some(Bound::exclusive(bet_info_key(round_id, &player)))
+    } else {
+        None
+    };
+
+    let my_game_list = bet_info_storage()
+        .idx
+        .player
+        .prefix(player.clone())
+        .range(deps.storage, start, None, Order::Ascending)
+        .take(limit)
+        .map(|res| res.map(|item| item.1))
+        .collect::<StdResult<Vec<_>>>()?;
+    Ok(MyGameResponse { my_game_list })
+}
+
+pub fn query_my_games_without_limit(
+    deps: Deps,
+    player: Addr,
+) -> StdResult<MyGameResponse> {
+    let my_game_list = bet_info_storage()
+        .idx
+        .player
+        .prefix(player.clone())
+        .range(deps.storage, None, None, Order::Ascending)
+        .map(|res| res.map(|item| item.1))
+        .collect::<StdResult<Vec<_>>>()?;
+    Ok(MyGameResponse { my_game_list })
 }
 
 fn assert_is_current_round(
